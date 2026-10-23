@@ -7427,6 +7427,32 @@ class OpsUnitTest(TorchTpuVsCpuTestBase):
         ),
     )
 
+  def test_nonzero_small_bool_masks_do_not_recompile(self):
+    # Both a new input length and a new nnz used to compile new executables
+    # during autoregressive decoding. Keep the inputs contiguous and create
+    # them on CPU so the counter measures nonzero rather than mask creation.
+    for size in (0, 1, 99, 100, 101, 102, 1000, 4095, 4096):
+      for count in sorted({0, min(1, size), size // 2, size}):
+        with self.subTest(size=size, count=count):
+          cpu_mask = torch.arange(size) < count
+          tpu_mask = cpu_mask.to("tpu")
+          torch.accelerator.synchronize()
+          start_misses = torch.tpu._get_cache_misses()
+          result = torch.nonzero(tpu_mask)
+          torch.accelerator.synchronize()
+          misses = torch.tpu._get_cache_misses() - start_misses
+          self.assertEqual(result.device, tpu_mask.device)
+          self.assertEqual(result.dtype, torch.int64)
+          utils.assert_close(result.cpu(), torch.nonzero(cpu_mask))
+          self.assertEqual(misses, 0)
+
+  def test_nonzero_small_bool_mask_noncontiguous(self):
+    cpu_mask = torch.tensor([True, False, False, True, True, False])
+    tpu_mask = cpu_mask.to("tpu")[::2]
+    result = torch.nonzero(tpu_mask)
+    self.assertEqual(result.device, tpu_mask.device)
+    utils.assert_close(result.cpu(), torch.nonzero(cpu_mask[::2]))
+
   @parameterized.parameters(torch.float32, torch.float16)
   def test_nonzero_subnormal(self, dtype):
     # TPU float comparators flush subnormals to zero, unlike CPU and CUDA.

@@ -76,6 +76,17 @@ absl::Status NonzeroOut(const at::Tensor& self, at::Tensor& out,
 }
 
 absl::StatusOr<at::Tensor> AtenNonzeroHelper(const at::Tensor& self) {
+  // Small boolean masks are common in autoregressive decoding. Lowering
+  // nonzero on TPU compiles both a size kernel for each input length and an
+  // indices kernel for each output size (github.com/google-pytorch/torch_tpu/
+  // issues/5085). Copying at most 4 KiB to the host avoids those compilations.
+  // nonzero already synchronizes with the host to determine its output size.
+  constexpr int64_t kMaxHostMaskElements = 4096;
+  if (self.scalar_type() == at::kBool && self.dim() == 1 &&
+      self.numel() <= kMaxHostMaskElements) {
+    return self.cpu().nonzero().to(self.device());
+  }
+
   // Get number of non-zero elements in the tensor as a tensor of size 1.
   TT_ASSIGN_OR_RETURN(auto num_non_zero_elements, GetNumNonZeroElements(self));
   // Move `num_non_zero_elements` to the CPU. This transition is necessary to
