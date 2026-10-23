@@ -151,7 +151,11 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
       // dimensions and inserts a new dimension at `dim_indexed`).
       TT_ASSIGN_OR_RETURN(info.num_non_zero_elements,
                           GetNumNonZeroElements(index_tensor));
-      info.indices.push_back(index_tensor);
+      // Empty masks can arrive on CPU. Dispatch still requires TPU inputs,
+      // even when the boolean lowering only returns the empty input tensor.
+      info.indices.push_back(index_tensor.numel() == 0
+                                 ? index_tensor.to(self.device())
+                                 : index_tensor);
       info.dimensions.push_back(dim_indexed);
       dim_indexed += index_tensor.dim();
     } else {
