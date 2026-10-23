@@ -81,9 +81,7 @@ absl::StatusOr<at::Tensor> AtenNonzeroHelper(const at::Tensor& self) {
   // indices kernel for each output size (github.com/google-pytorch/torch_tpu/
   // issues/5085). Copying at most 4 KiB to the host avoids those compilations.
   // nonzero already synchronizes with the host to determine its output size.
-  constexpr int64_t kMaxHostMaskElements = 4096;
-  if (self.scalar_type() == at::kBool && self.dim() == 1 &&
-      self.numel() <= kMaxHostMaskElements) {
+  if (UseHostNonzeroForSmallMask(self)) {
     return self.cpu().nonzero().to(self.device());
   }
 
@@ -118,6 +116,12 @@ absl::Status AtenNonzeroOutHelper(const at::Tensor& self, at::Tensor& out) {
 }
 
 }  // namespace
+
+bool UseHostNonzeroForSmallMask(const at::Tensor& self) {
+  constexpr int64_t kMaxHostMaskElements = 4096;
+  return self.scalar_type() == at::kBool && self.dim() == 1 &&
+         self.numel() <= kMaxHostMaskElements;
+}
 
 at::Tensor AtenNonzero(const at::Tensor& self) {
   TT_KERNEL(OpName::kNonzero, _, (self), {

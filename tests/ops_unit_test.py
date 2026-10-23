@@ -7427,6 +7427,45 @@ class OpsUnitTest(TorchTpuVsCpuTestBase):
         ),
     )
 
+  @parameterized.parameters(
+      (0, 0), (1, 0), (1, 1), (99, 0), (100, 33), (101, 101), (4096, 7)
+  )
+  def test_index_small_bool_mask_reuses_integer_kernel(self, size, count):
+    cpu_x = torch.arange(size, dtype=torch.float32)
+    cpu_mask = torch.arange(size) < count
+    tpu_x = cpu_x.to("tpu")
+    tpu_mask = cpu_mask.to("tpu")
+    positions = torch.nonzero(cpu_mask).squeeze(1).to("tpu")
+    # Warm the equivalent integer gather. Boolean indexing should reuse it
+    # without compiling mask-counting or nonzero/sort kernels.
+    expected = tpu_x[positions]
+    torch.accelerator.synchronize()
+    start_misses = torch.tpu._get_cache_misses()
+    result = tpu_x[tpu_mask]
+    torch.accelerator.synchronize()
+    misses = torch.tpu._get_cache_misses() - start_misses
+    self.assertEqual(result.device, tpu_x.device)
+    utils.assert_close(result.cpu(), cpu_x[cpu_mask])
+    utils.assert_close(result, expected)
+    self.assertEqual(misses, 0)
+
+  @parameterized.parameters(0, 1, 2)
+  def test_index_small_bool_mask_with_slices(self, axis):
+    cpu_x = torch.arange(210, dtype=torch.float32).reshape(7, 6, 5)
+    size = cpu_x.shape[axis]
+    cpu_mask = (torch.arange(2 * size) % 3 == 0)[::2]
+    tpu_x = cpu_x.to("tpu")
+    tpu_mask = (torch.arange(2 * size) % 3 == 0).to("tpu")[::2]
+    indices = (slice(None),) * axis
+    result = tpu_x[indices + (tpu_mask,)]
+    utils.assert_close(result.cpu(), cpu_x[indices + (cpu_mask,)])
+    out = torch.empty(0, dtype=tpu_x.dtype, device=tpu_x.device)
+    result = torch.ops.aten.index.Tensor_out(
+        tpu_x, [None] * axis + [tpu_mask], out=out
+    )
+    self.assertIs(result, out)
+    utils.assert_close(result.cpu(), cpu_x[indices + (cpu_mask,)])
+
   def test_nonzero_small_bool_masks_do_not_recompile(self):
     # Both a new input length and a new nnz used to compile new executables
     # during autoregressive decoding. Keep the inputs contiguous and create

@@ -42,6 +42,7 @@ torch_tpu_cc_library(
         "//csrc/ops:unary_aten_kernels",
         "//csrc/ops/macros:kernel",
         "//csrc/ops/nonzero",
+        "//csrc/ops/nonzero:nonzero_aten_kernels",
         "//shims/torch:aten_headers",
         "//shims/torch:torch_headers",
         "//shims/torch/c10/util:base_headers",

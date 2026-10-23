@@ -21,6 +21,10 @@
 
 namespace torch_tpu {
 
+// A bounded host path avoids compilation for short decoding masks. Nonzero
+// already synchronizes with the host to determine its data-dependent shape.
+bool UseHostNonzeroForSmallMask(const at::Tensor& self);
+
 // This op is implemented by first calculating and materializing the output
 // shape then restarting tracing with a known data-dependent output shape
 //

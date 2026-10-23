@@ -39,6 +39,7 @@
 #include "csrc/ops/index_utils.h"
 #include "csrc/ops/macros/kernel.h"
 #include "csrc/ops/nonzero/nonzero.h"
+#include "csrc/ops/nonzero/nonzero_aten_kernels.h"
 #include "csrc/ops/op_builder_utils.h"
 #include "csrc/ops/op_names.h"
 #include "csrc/ops/unary_aten_kernels.h"
@@ -128,6 +129,17 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
             << " and indexed tensor shape " << self.sizes();
       }
 
+      // For short 1D masks, compute positions on the host and reuse integer
+      // indexing. This avoids compiling a sort for each mask length and output
+      // size. Keep has_bool_mask set to preserve the mixed-index checks below;
+      // the generated positions do not need negative-index resolution.
+      if (UseHostNonzeroForSmallMask(index_tensor)) {
+        info.indices.push_back(
+            index_tensor.cpu().nonzero().squeeze(1).to(self.device()));
+        info.dimensions.push_back(dim_indexed++);
+        continue;
+      }
+
       // Compute the number of `True` elements for the output shape, and store
       // the unflattened mask along with `dim_indexed` so that all reshapes,
       // nonzero extraction, and gathering happen inside a single StableHLO
@@ -154,8 +166,8 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
       << "expected at least one index tensor to be defined, got 0";
 
   // Negative-index resolution copies indices to CPU for bounds validation and
-  // wrapping. For boolean masks, indices are generated on-device by
-  // `BuildNonzeroShlo` and are guaranteed to be non-negative `[0, dim_size)`.
+  // wrapping. Positions generated from boolean masks are already non-negative
+  // and within `[0, dim_size)`, whether extracted on the host or on TPU.
   if (!has_bool_mask) {
     TT_RETURN_IF_ERROR(
         ResolveNegativeIndices(info.indices, self.sizes(), info.dimensions));
