@@ -7428,7 +7428,7 @@ class OpsUnitTest(TorchTpuVsCpuTestBase):
     )
 
   @parameterized.parameters(
-      (0, 0), (1, 0), (1, 1), (99, 0), (100, 33), (101, 101), (4096, 7)
+      (1, 0), (1, 1), (99, 0), (100, 33), (101, 101), (4096, 7)
   )
   def test_index_small_bool_mask_reuses_integer_kernel(self, size, count):
     cpu_x = torch.arange(size, dtype=torch.float32)
@@ -7447,7 +7447,29 @@ class OpsUnitTest(TorchTpuVsCpuTestBase):
     self.assertEqual(result.device, tpu_x.device)
     utils.assert_close(result.cpu(), cpu_x[cpu_mask])
     utils.assert_close(result, expected)
-    self.assertEqual(misses, 0)
+    # Empty results can use a separate zero-sized executable. They should
+    # still avoid compiling both mask-counting and fused sorting kernels.
+    self.assertLessEqual(misses, 1 if count == 0 else 0)
+
+  @parameterized.parameters(((0,), 0), ((2, 0, 4), 1))
+  def test_index_empty_bool_mask(self, shape, axis):
+    cpu_x = torch.empty(shape, dtype=torch.float32)
+    cpu_mask = torch.empty(0, dtype=torch.bool)
+    tpu_x = cpu_x.to("tpu")
+    slices = (slice(None),) * axis
+    expected = cpu_x[slices + (cpu_mask,)]
+    # Do not warm with an empty integer index: that lowering constructs an
+    # invalid size-one gather slice when the indexed input dimension is zero.
+    for mask in (cpu_mask, cpu_mask.to("tpu")):
+      result = tpu_x[slices + (mask,)]
+      self.assertEqual(result.device, tpu_x.device)
+      utils.assert_close(result.cpu(), expected)
+      out = torch.empty(0, dtype=tpu_x.dtype, device=tpu_x.device)
+      result = torch.ops.aten.index.Tensor_out(
+          tpu_x, [None] * axis + [mask], out=out
+      )
+      self.assertIs(result, out)
+      utils.assert_close(result.cpu(), expected)
 
   @parameterized.parameters(0, 1, 2)
   def test_index_small_bool_mask_with_slices(self, axis):

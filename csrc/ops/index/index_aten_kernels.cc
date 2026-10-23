@@ -133,7 +133,10 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
       // indexing. This avoids compiling a sort for each mask length and output
       // size. Keep has_bool_mask set to preserve the mixed-index checks below;
       // the generated positions do not need negative-index resolution.
-      if (UseHostNonzeroForSmallMask(index_tensor)) {
+      // Empty masks use the boolean lowering's empty-dimension guard instead
+      // of building a gather with a size-one slice of a size-zero dimension.
+      if (index_tensor.numel() > 0 &&
+          UseHostNonzeroForSmallMask(index_tensor)) {
         info.indices.push_back(
             index_tensor.cpu().nonzero().squeeze(1).to(self.device()));
         info.dimensions.push_back(dim_indexed++);
@@ -165,9 +168,9 @@ absl::StatusOr<IndicesInfo> ValidateAndGetIndicesInfo(
   TT_RET_CHECK(!info.indices.empty(), error::kInvalidArgument)
       << "expected at least one index tensor to be defined, got 0";
 
-  // Negative-index resolution copies indices to CPU for bounds validation and
-  // wrapping. Positions generated from boolean masks are already non-negative
-  // and within `[0, dim_size)`, whether extracted on the host or on TPU.
+  // Positions generated from boolean masks are already non-negative and within
+  // `[0, dim_size)`, whether extracted on the host or on TPU, so they do not
+  // need negative-index resolution.
   if (!has_bool_mask) {
     TT_RETURN_IF_ERROR(
         ResolveNegativeIndices(info.indices, self.sizes(), info.dimensions));
